@@ -1,2 +1,2 @@
 # μJumbo
-JavaScript micro-framework for RIA created as support for JumboJS the Node.js MVC framework
+JavaScript micro-framework for SPA created as support for JumboJS the Node.js MVC framework.
