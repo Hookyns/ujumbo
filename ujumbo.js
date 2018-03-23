@@ -17,6 +17,8 @@ var uJumbo = (function () {
 
 	//region Helper functions
 
+	var X_JUMBO_VIEW_TYPE_HEADER_PROP_NAME = "x-required-content-type";
+
 	/**
 	 * Error logging
 	 */
@@ -114,12 +116,78 @@ var uJumbo = (function () {
 	 * Base Controller
 	 * @constructor
 	 */
-	var BaseController = function () {
+	var BaseController = function (containerSel) {
 		this.container = null;
 		this.events = [];
 		this.links = [];
 		this.forms = [];
 		this.snippets = {};
+
+		console.log("BaseController called");
+
+		// store controller in context
+		appContext.cntrls.push(this);
+
+		var self = this;
+
+		// back/forward buttons event
+		uJumbo.addEvent(window, "popstate", function popsthndlr() {
+			var s = history.state;
+			console.debug("PopState", s, new Date());
+
+			if (s && s.uJState) {
+				// Controller destruction detection
+				var i = appContext.cntrls.indexOf(self);
+				if (i == -1) {
+					uJumbo.removeEvent(window, "popstate", popsthndlr);
+					return;
+				}
+				// Load stored content
+				s = s.content[i];
+				if (s) {
+					s.__procSnip(s);
+				}
+			} else {
+				console.log("[PopState] No uJState");
+				//window.location.href = window.location.href;
+				//Controller.prototype.loadPage(location.href, false);
+			}
+		});
+
+		uJumbo.onReady(function () {
+			if (!containerSel) {
+				logError("You've not specified 'selector' of controller '" + self.constructor.name + "'."
+					+ "You must pass selector as argument when calling super().");
+				return;
+			}
+
+			var container = uJumbo.get(containerSel);
+
+			if (container instanceof NodeList && container.length == 1) {
+				container = container[0];
+			}
+
+			if (!(container instanceof Node)) {
+				logError("Selector of controller '" + self.constructor.name + "' is invalid. No element found.");
+				return;
+			}
+
+			// Find all elements n container
+			var els = container.getElementsByTagName("*");
+
+			// Add container to the collection
+			els = Array.prototype.slice.call(els);
+			els.unshift(container);
+
+			self.__findAttrs(els);
+			self.__regActions();
+			//proccess(els, context);
+
+			// Call initialize onready
+			if (self["initiate"]) {
+				self["initiate"]();
+			}
+		});
 	};
 
 	/**
@@ -133,9 +201,11 @@ var uJumbo = (function () {
 		// TODO: Show loading spinner
 		// jEls.content.innerHTML = uJumbo.loadingSpinnerHtml;
 
-		uJumbo.xhr.get(href, "text/html", {
-			"X-Return-View": "Partial"
-		}).then(function(data) {
+		var headers = {};
+		headers[X_JUMBO_VIEW_TYPE_HEADER_PROP_NAME] = "text/html"; // Setting this header will result in returned data
+		// it'll be rendered partial view
+
+		uJumbo.xhr.get(href, "text/html", headers).then(function(data) {
 			console.log(arguments);
 
 			//var data = odata;
@@ -213,31 +283,32 @@ var uJumbo = (function () {
 	 * @param {NodeList} els
 	 */
 	BaseController.prototype.__findAttrs = function (els) {
-		var ell;
+		var ell, dataset;
 		for (var el in els) {
 			if (els.hasOwnProperty(el)) {
 				ell = els[el];
+				dataset = ell.dataset;
 
-				if (ell.dataset) {
-					for (var ds in ell.dataset) {
+				if (dataset) {
+					for (var ds in dataset) {
 						if (ell.dataset.hasOwnProperty(ds) && ds.substr(0, 3) === "jOn") {
-							this.events.push({element: ell, event: ds.substr(3), method: ell.dataset[ds]});
+							this.events.push({element: ell, event: ds.substr(3), method: dataset[ds]});
 						}
 					}
 
 					// LINK
-					if (ell.dataset["jLink"]) {
+					if ("jLink" in dataset) {
 						if (!ell.href || ell.tagName !== "A") continue;
 						this.links.push(ell);
 					}
 
 					// SNIPPET
-					if (ell.dataset["jSnippet"]) {
-						this.snippets[ell.dataset["jSnippet"]] = ell;
+					if ("jSnippet" in dataset) {
+						this.snippets[dataset["jSnippet"]] = ell;
 					}
 
 					// FORM
-					if (ell.dataset["jForm"]) {
+					if ("jForm" in dataset) {
 						if (!ell.action || ell.tagName !== "FORM") continue;
 						this.forms.push(ell);
 					}
@@ -279,7 +350,7 @@ var uJumbo = (function () {
 		eln = this.links.length;
 		for (e = 0; e < eln; e++) {
 			item = this.links[e];
-			item.setAttribute("onclick", "return false;");
+			// item.setAttribute("onclick", "return false;");
 			uJumbo.addEvent(item, "click", function (e) {
 				(e || window.event).preventDefault();
 				self.loadPage(this.href);
@@ -290,7 +361,7 @@ var uJumbo = (function () {
 		eln = this.forms.length;
 		for (e = 0; e < eln; e++) {
 			item = this.forms[e];
-			item.setAttribute("onsubmit", "return false;");
+			// item.setAttribute("onsubmit", "return false;");
 			uJumbo.addEvent(item, "submit", function (e) {
 				(e || window.event).preventDefault();
 				self.sendForm(this);
@@ -345,11 +416,7 @@ var uJumbo = (function () {
 
 	//endregion
 
-
-
-
-
-	var __onRdyCbs = [];
+	var __onRdyCbs; // must be undefined
 
 	return {
 		consoleLogging: true,
@@ -382,7 +449,7 @@ var uJumbo = (function () {
 		isReady: false,
 
 		/**
-		 *
+		 * Register onready (windows onload) handler
 		 * @param fn
 		 * @param delay
 		 */
@@ -403,19 +470,19 @@ var uJumbo = (function () {
 				return;
 			}
 
-			__onRdyCbs.push(cb);
-
 			if (!__onRdyCbs) {
 
 				__onRdyCbs = [function () {
 					uJumbo.isReady = true;
-				}];
+				}, cb];
 				uJumbo.addEvent(window, "load", function (e) {
 					e = e || window.event;
 					for (var i = 0; i < __onRdyCbs.length; i++) {
 						__onRdyCbs[i](e);
 					}
 				});
+			} else {
+				__onRdyCbs.push(cb);
 			}
 		},
 
@@ -587,85 +654,108 @@ var uJumbo = (function () {
 			}
 		},
 
+		// /**
+		//  * Function for creating application controller
+		//  * @param container
+		//  * @param {Function} Controller
+		//  */
+		// createController: function (container, Controller) {
+		// 	console.log(BaseController); // TODO: Remove
+		//
+		// 	// For IE compatibility but with ES6 class support, it must be done in try-catch with class keyword
+		// 	try {
+		//
+		// 	} catch (e) {
+		//
+		// 	}
+		// 	var Ctrl = function () {
+		// 		console.log("ctrl called");
+		// 		// call super()
+		// 		BaseController.apply(this, Array.prototype.slice.call(arguments));
+		// 		Controller.apply(this, Array.prototype.slice.call(arguments));
+		// 	};
+		//
+		// 	console.log("Ctor", Controller.prototype.constructor);
+		//
+		// 	// Extends BaseController
+		// 	Controller.prototype = Object.create(BaseController.prototype);
+		// 	Controller.prototype.constructor = Controller;
+		//
+		// 	// Extends - it's important to create instance first but call user's constructor onload
+		// 	// so extend user class and call his constructor later as __init()
+		// 	Ctrl.prototype = Object.create(Controller.prototype);
+		// 	Ctrl.prototype.constructor = Controller.prototype.constructor;//Ctrl;
+		// 	// Ctrl.prototype.__init = Controller.prototype.constructor;
+		//
+		// 	console.log(Controller.prototype.constructor);
+		//
+		// 	// instantiate Controller
+		// 	var ctrl = new Ctrl();
+		//
+		// 	// // If initiate method exists, call it
+		// 	// if (ctrl["initiate"]) {
+		// 	// 	ctrl["initiate"]();
+		// 	// }
+		//
+		// 	// store controller in context
+		// 	appContext.cntrls.push(ctrl);
+		//
+		// 	// back/forward buttons event
+		// 	uJumbo.addEvent(window, "popstate", function popsthndlr() {
+		// 		var s = history.state;
+		// 		console.debug("PopState", s, new Date());
+		//
+		// 		if (s && s.uJState) {
+		// 			var i = appContext.cntrls.indexOf(ctrl);
+		// 			if (i == -1) {
+		// 				uJumbo.removeEvent(window, "popstate", popsthndlr);
+		// 				return;
+		// 			}
+		// 			s = s.content[i];
+		// 			if (s) {
+		// 				s.__procSnip(s);
+		// 			}
+		// 		} else {
+		// 			console.log("[PopState] No uJState");
+		// 			//window.location.href = window.location.href;
+		// 			//Controller.prototype.loadPage(location.href, false);
+		// 		}
+		// 	});
+		//
+		// 	uJumbo.onReady(function () {
+		// 		container = uJumbo.get(container);
+		//
+		// 		if (container instanceof NodeList && container.length == 1) {
+		// 			container = container[0];
+		// 		}
+		//
+		// 		if (!(container instanceof Node)) {
+		// 			console.error("Argument 'container' is invalid");
+		// 			return;
+		// 		}
+		//
+		//
+		// 		/** Projdeme container a najdeme si všechny prvky pro nás */
+		// 		var els = container.getElementsByTagName("*");
+		//
+		// 		/** Do elementů přidáme i container samotný*/
+		// 		els = Array.prototype.slice.call(els);
+		// 		els.unshift(container);
+		//
+		// 		//proccess(els, context);
+		//
+		// 		// Call onready received controller
+		// 		// ctrl.__init.call(ctrl);
+		// 		if (ctrl["initialize"]) {
+		// 			ctrl["initialize"]();
+		// 		}
+		// 	});
+		// },
+
 		/**
-		 * Function for creating application controller
-		 * @param container
-		 * @param {Function} Controller
+		 * Controller class which should be inherited
 		 */
-		createController: function (container, Controller) {
-			var Ctrl = function () {
-				// call super()
-				BaseController.apply(this, Array.prototype.slice.call(arguments));
-			};
-
-			// Extends BaseController
-			Controller.prototype = Object.create(BaseController.prototype);
-			Controller.prototype.constructor = Controller;
-
-			// Extends - it's important to create instance first but call user's constructor onload
-			// so extend user class and call his constructor later as __init()
-			Ctrl.prototype = Object.create(Controller.prototype);
-			Ctrl.prototype.constructor = Ctrl;
-			Ctrl.prototype.__init = Controller;
-
-			// instantiate Controller
-			var ctrl = new Ctrl();
-
-			// If initiate method exists, call it
-			if (ctrl["initiate"]) {
-				ctrl["initiate"]();
-			}
-
-			// store controller in context
-			appContext.cntrls.push(ctrl);
-
-			// back/forward buttons event
-			uJumbo.addEvent(window, "popstate", function popsthndlr() {
-				var s = history.state;
-				console.debug("PopState", s, new Date());
-
-				if (s && s.uJState) {
-					var i = appContext.cntrls.indexOf(ctrl);
-					if (i == -1) {
-						uJumbo.removeEvent(window, "popstate", popsthndlr);
-						return;
-					}
-					s = s.content[i];
-					if (s) {
-						s.__procSnip(s);
-					}
-				} else {
-					console.log("[PopState] No uJState");
-					//window.location.href = window.location.href;
-					//Controller.prototype.loadPage(location.href, false);
-				}
-			});
-
-			uJumbo.onReady(function () {
-				container = uJumbo.get(container);
-
-				if (container instanceof NodeList && container.length == 1) {
-					container = container[0];
-				}
-
-				if (!(container instanceof Node)) {
-					console.error("Argument 'container' is invalid");
-					return;
-				}
-
-
-				/** Projdeme container a najdeme si všechny prvky pro nás */
-				var els = container.getElementsByTagName("*");
-
-				/** Do elementů přidáme i container samotný*/
-				els = Array.prototype.slice.call(els);
-				els.unshift(container);
-
-				//proccess(els, context);
-
-				ctrl.__init();
-			});
-		},
+		Controller: BaseController,
 
 		/**
 		 * Destroy controller
