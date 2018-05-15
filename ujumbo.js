@@ -17,7 +17,14 @@ var uJumbo = (function () {
 
 	//region Helper functions
 
-	var X_JUMBO_VIEW_TYPE_HEADER_PROP_NAME = "x-required-content-type";
+	var X_JUMBO_VIEW_TYPE_HEADER_PROP_NAME = "X-Required-Content-Type",
+		ON_POP_STATE_HANDLER_NAME = "onPopState",
+		ON_INIT_HANDLER_NAME = "onInit",
+		ON_NAVIGATE_HANDLER_NAME = "onNavigate",
+		ON_BEFORE_NAVIGATE_HANDLER_NAME = "onBeforeNavigate",
+		ON_FORM_SUBMIT_HANDLER_NAME = "onFormSubmit",
+		ON_BEFORE_FORM_SUBMIT_HANDLER_NAME = "onBeforeFormSubmit",
+		SCRIPT_SRC_REGEX = /<script[^>]*src=.?([^"']+)/ig;
 
 	/**
 	 * Error logging
@@ -33,6 +40,14 @@ var uJumbo = (function () {
 	function logWarn() {
 		if (uJumbo.consoleLogging)
 			console.warn.apply(null, Array.prototype.slice.call(arguments));
+	}
+
+	/**
+	 * Debug logging
+	 */
+	function logDebug() {
+		if (uJumbo.debug)
+			console.debug.apply(null, Array.prototype.slice.call(arguments));
 	}
 
 	/**
@@ -93,19 +108,22 @@ var uJumbo = (function () {
 	};
 
 	/**
-	 * Save current app state to history
+	 * Save new app state of all controllers to history
+	 * @param path
 	 */
-	function saveState() {
+	function saveState(path) {
+		path = path || location.pathname;
+
 		var state = {
 			uJState: true,
 			content: {}
 		};
 
-		for (var c = appContext.cntrls.length - 1; c >= 0; c++) {
+		for (var c = appContext.cntrls.length - 1; c >= 0; c--) {
 			state.content[c] = appContext.cntrls[c].__getContent();
 		}
 
-		history.pushState(state, document.title, window.location.href);
+		history.pushState(state, document.title, path/*window.location.href*/);
 	}
 
 	//endregion
@@ -115,15 +133,18 @@ var uJumbo = (function () {
 	/**
 	 * Base Controller
 	 * @constructor
+	 * @param {string} containerSel
+	 * @param {string} snippetName
 	 */
-	var BaseController = function (containerSel) {
+	var BaseController = function (containerSel, snippetName) {
 		this.container = null;
 		this.events = [];
 		this.links = [];
 		this.forms = [];
 		this.snippets = {};
+		this.snippetName = snippetName || "content";
 
-		console.log("BaseController called");
+		logDebug("BaseController called");
 
 		// store controller in context
 		appContext.cntrls.push(this);
@@ -133,24 +154,29 @@ var uJumbo = (function () {
 		// back/forward buttons event
 		uJumbo.addEvent(window, "popstate", function popsthndlr() {
 			var s = history.state;
-			console.debug("PopState", s, new Date());
+			logDebug("PopState", s, new Date());
 
 			if (s && s.uJState) {
 				// Controller destruction detection
 				var i = appContext.cntrls.indexOf(self);
-				if (i == -1) {
+				if (i === -1) {
 					uJumbo.removeEvent(window, "popstate", popsthndlr);
 					return;
 				}
+
 				// Load stored content
 				s = s.content[i];
-				if (s) {
-					s.__procSnip(s);
+
+				let prevent = self[ON_POP_STATE_HANDLER_NAME]
+					? (self[ON_POP_STATE_HANDLER_NAME](s) === false)
+					: false;
+
+				if (!prevent) {
+					self.__loadState(s);
 				}
 			} else {
-				console.log("[PopState] No uJState");
-				//window.location.href = window.location.href;
-				//Controller.prototype.loadPage(location.href, false);
+				logDebug("[PopState] No uJState");
+				window.location.reload();
 			}
 		});
 
@@ -163,7 +189,7 @@ var uJumbo = (function () {
 
 			var container = uJumbo.get(containerSel);
 
-			if (container instanceof NodeList && container.length == 1) {
+			if (container instanceof NodeList && container.length === 1) {
 				container = container[0];
 			}
 
@@ -171,6 +197,8 @@ var uJumbo = (function () {
 				logError("Selector of controller '" + self.constructor.name + "' is invalid. No element found.");
 				return;
 			}
+
+			self.container = container;
 
 			// Find all elements n container
 			var els = container.getElementsByTagName("*");
@@ -181,11 +209,10 @@ var uJumbo = (function () {
 
 			self.__findAttrs(els);
 			self.__regActions();
-			//proccess(els, context);
 
 			// Call initialize onready
-			if (self["initiate"]) {
-				self["initiate"]();
+			if (self[ON_INIT_HANDLER_NAME]) {
+				self[ON_INIT_HANDLER_NAME]();
 			}
 		});
 	};
@@ -197,76 +224,164 @@ var uJumbo = (function () {
 	 */
 	BaseController.prototype.loadPage = function (href, pushToHistory) {
 		pushToHistory = pushToHistory !== false;
-
 		// TODO: Show loading spinner
-		// jEls.content.innerHTML = uJumbo.loadingSpinnerHtml;
+		// this.container.innerHTML = uJumbo.loadingSpinnerHtml;
 
-		var headers = {};
+		var headers = {}, self = this;
 		headers[X_JUMBO_VIEW_TYPE_HEADER_PROP_NAME] = "text/html"; // Setting this header will result in returned data
 		// it'll be rendered partial view
 
-		uJumbo.xhr.get(href, "text/html", headers).then(function(data) {
-			console.log(arguments);
+		if (self[ON_BEFORE_NAVIGATE_HANDLER_NAME]) {
+			self[ON_BEFORE_NAVIGATE_HANDLER_NAME](headers);
+		}
 
-			//var data = odata;
-			//var title = data.match(/<(?:(?:title)|(?:TITLE)).*?>([\s\S]*?)<\/(?:(?:title)|(?:TITLE))>/);
-			//data = data.match(/<(?:(?:body)|(?:BODY)).*?>([\s\S]*?)<\/(?:(?:body)|(?:BODY))>/);
-			//
-			//if (data !== null) {
-			//	if (!pushToHistory) {
-			//		title = null;
-			//		href = null;
-			//	}
-			//	proccessPage(data[1], title, href);
-			//} else {
-			//	if (controller['proccessLoadPage']) {
-			//		controller['proccessLoadPage'](odata);
-			//	}
-			//}
-		}).catch(function(err) {
-			console.error("Error:", err.message, arguments);
+		// // Save actual state again / rewrite
+		// this.__saveState();
+
+		uJumbo.xhr.get(href, undefined, headers).then(function (xhr) {
+			if (xhr.redirected) {
+				href = xhr.responseURL;
+			}
+			self._processDSRResponse(xhr.response, href, pushToHistory);
+		}).catch(function (error) {
+			let prevent = this[ON_NAVIGATE_HANDLER_NAME]
+				? (this[ON_NAVIGATE_HANDLER_NAME](error, undefined) === false)
+				: false;
+
+			if (!prevent) {
+				logError("loadPage failed. ", error);
+			}
 		});
 	};
 
 	/**
-	 * Odeslání formuláře
+	 * Send given form to server
 	 * @param form
 	 */
 	BaseController.prototype.sendForm = function (form) {
-		//if (form.tagName.toLowerCase() != "form" || !form.action) {
-		//	console.log("Data-j-form attribut were set on bad Element or just action miss.");
-		//	return;
-		//}
-		//
-		//var self = this;
-		//
-		//jumbo.xhr.post(form.action, new FormData(form), function(err, data) {
-		//	if (err != null) {
-		//		console.log("Error:", err.message);
-		//		return;
-		//	}
-		//
-		//	if (data.formErrorMessages) {
-		//		var erl = data.formErrorMessages.length;
-		//
-		//		for (var e = 0; e < erl; e++) {
-		//			!!jumbo.alert ? jumbo.alert(data.formErrorMessages[e]) : alert(data.formErrorMessages[e]);
-		//		}
-		//
-		//		return;
-		//	}
-		//
-		//	if (data.redirect) {
-		//		self.loadPage(data.redirect);
-		//		return;
-		//	}
-		//
-		//	if (controller['proccessForm']) {
-		//		controller['proccessForm'](data);
-		//	}
-		//}, "json");
+		var headers = {}, self = this, data = window["FormData"] ? (new FormData(form)) : serialize(form);
+		headers[X_JUMBO_VIEW_TYPE_HEADER_PROP_NAME] = "text/html";
+
+		if (self[ON_BEFORE_FORM_SUBMIT_HANDLER_NAME]) {
+			self[ON_BEFORE_FORM_SUBMIT_HANDLER_NAME](data, headers);
+		}
+
+		uJumbo.ajax({
+			url: form.action,
+			method: "POST",
+			headers: headers,
+			data: data
+		}).then(function (xhr) {
+			let prevent = self[ON_FORM_SUBMIT_HANDLER_NAME]
+				? (self[ON_FORM_SUBMIT_HANDLER_NAME](null, xhr.response, xhr) === false)
+				: false;
+
+			if (!prevent) {
+				self._processDSRResponse(
+					xhr.response,
+					xhr.redirected ? xhr.responseURL : form.action,
+					true
+				);
+			}
+		}).catch(function (error) {
+			let prevent = self[ON_FORM_SUBMIT_HANDLER_NAME]
+				? (self[ON_FORM_SUBMIT_HANDLER_NAME](error, error.xhr.response) === false)
+				: false;
+
+			if (!prevent) {
+				logError("sendForm failed.", error);
+			}
+		});
 	};
 
+	/**
+	 * Refresh elements in container.
+	 */
+	BaseController.prototype.refresh = function() {
+		// TODO: Implement; Vytvořeno hlavně kvůli tomu, aby mohl uživatel něco zavolat,
+		// že udělal změny s elementy (např přidat nové tlačítko s eventem) a nechat znovu dohledat atributy a registrovat akce
+	};
+
+	/**
+	 * Save state of this controller
+	 * @private
+	 */
+	BaseController.prototype.__saveState = function (path) {
+		path = path || location.pathname;
+		var state = history.state;
+
+		if (state == null) { // Save state of all controllers
+			saveState(location.pathname);
+			return;
+		}
+
+		var i = appContext.cntrls.indexOf(this);
+		state.content[i] = this.__getContent();
+
+		history.replaceState(state, document.title, path);
+	};
+
+	/**
+	 * Load given state; default called on window.popstate
+	 * @param state
+	 * @private
+	 */
+	BaseController.prototype.__loadState = function (state) {
+		if (state) {
+			this.container.innerHTML = state;
+			this.__procSnip(state);
+		}
+	};
+
+	/**
+	 * Proces Doubl-Sided Rendering response
+	 * @param response
+	 * @param href
+	 * @param pushToHistory
+	 */
+	BaseController.prototype._processDSRResponse = function (response, href, pushToHistory) {
+		// TODO: Solve snippet problem; container vs snipet vs content ?
+		var content = (uJumbo.get("[data-j-snippet='" + this.snippetName + "']", this.container) || [null])[0];
+
+		if (content) {
+			content.innerHTML = response;
+
+			if (pushToHistory) {
+				saveState(href);
+			} else {
+				this.__saveState(href);
+			}
+
+			// FadeOut effect
+			content.className = (content.className.replace("j-fade-in", "") + " j-fade-out").trim();
+
+			let prevent = this[ON_NAVIGATE_HANDLER_NAME]
+				? (this[ON_NAVIGATE_HANDLER_NAME](null, response) === false)
+				: false;
+
+			if (!prevent) {
+				this.__procSnip(response, undefined, function() {
+
+					// Fade In effect
+					setTimeout(function() {
+						content.className = (content.className.replace("j-fade-out", "") + " j-fade-in").trim();
+					}, 10);
+				});
+			}
+		}
+
+
+		/* TODO: Opravdu řešit vykreslením celého view na serveru s matchem na daný snippet
+		Vracet data ve formátu:
+		{
+			title: "Titulek stránky"
+			html: "html daného snippetu",
+			... umožnit na serveru doplnění dalších věcí ...
+		}
+
+		Zde umožnit reagovat -> proccessLoadPage; aby si mohl programátor doplněné parametry zase převzít a zpracovat
+		*/
+	};
 
 	/**
 	 * Return current content of controller container
@@ -289,9 +404,9 @@ var uJumbo = (function () {
 				ell = els[el];
 				dataset = ell.dataset;
 
-				if (dataset) {
+				if (dataset && !dataset.jInitiated) {
 					for (var ds in dataset) {
-						if (ell.dataset.hasOwnProperty(ds) && ds.substr(0, 3) === "jOn") {
+						if (dataset.hasOwnProperty(ds) && ds.substr(0, 3) === "jOn") {
 							this.events.push({element: ell, event: ds.substr(3), method: dataset[ds]});
 						}
 					}
@@ -312,6 +427,8 @@ var uJumbo = (function () {
 						if (!ell.action || ell.tagName !== "FORM") continue;
 						this.forms.push(ell);
 					}
+
+					dataset.jInitiated = true;
 				}
 			}
 		}
@@ -326,7 +443,7 @@ var uJumbo = (function () {
 
 		// Events
 		for (var e = 0; e < eln; e++) {
-			(function(item) {
+			(function (item) {
 				getFn(item.method, function (fnName, args) {
 					// Add element to args
 					args.push(item.element);
@@ -374,17 +491,22 @@ var uJumbo = (function () {
 	};
 
 	/**
-	 *
-	 * @param data
-	 * @param snippetName
-	 * @param save
+	 * Process snippet, find and run scripts, find fw attrs and register events
+	 * @param {string} data Snippet html code
+	 * @param {string} [snippetName]
+	 * @param callback
 	 * @private
 	 */
-	BaseController.prototype.__procSnip = function (data, snippetName, save) {
+	BaseController.prototype.__procSnip = function (data, snippetName, callback) {
 		var jss = "";
+		var jsFiles = [];
 
 		data.replace(/<script>([\s\S]*?)<\/script>/ig, function (_, match) {
 			jss += match;
+		});
+
+		data.replace(SCRIPT_SRC_REGEX, function (_, match) {
+			jsFiles.push(match);
 		});
 
 		var p;
@@ -400,14 +522,32 @@ var uJumbo = (function () {
 			p = p[0];
 		}
 
-		if (save) {
-			saveState();
+		var self = this;
+		function next() {
+			self.__findAttrs(p.getElementsByTagName("*"));
+			self.__regActions();
+
+			eval(jss);
+			if (callback) callback();
 		}
 
-		this.__findAttrs(p.getElementsByTagName("*"));
-		this.__regActions();
+		if (jsFiles.length === 0) {
+			return next();
+		}
 
-		eval(jss);
+		// Add scripts files
+		var before = document.body.firstChild, cnt = jsFiles.length;
+		for (var i = 0; i < jsFiles.length; i++) {
+			(function() {
+				var scrpt = document.createElement("script");
+				scrpt.setAttribute("src", jsFiles[i]);
+				scrpt.onload = function () {
+					if (--cnt === 0) next();
+					document.body.removeChild(scrpt);
+				};
+				document.body.insertBefore(scrpt, before)
+			})();
+		}
 	};
 
 	BaseController.prototype.__destroy = function () {
@@ -420,6 +560,8 @@ var uJumbo = (function () {
 
 	return {
 		consoleLogging: true,
+
+		debug: false,
 
 		loadingSpinnerHtml: "<div class='ujumbo-loading-spinner'><div>",
 
@@ -435,13 +577,15 @@ var uJumbo = (function () {
 		},
 
 		addEvent: function (el, type, fn) {
-			/*if (el.addEventListener) */el.addEventListener(type, fn);
+			/*if (el.addEventListener) */
+			el.addEventListener(type, fn);
 			// else if (el.attachEvent) el.attachEvent("on" + type, fn);
 			return el;
 		},
 
 		removeEvent: function (el, type, fn) {
-			/*if (el.removeEventListener) */el.removeEventListener(type, fn);
+			/*if (el.removeEventListener) */
+			el.removeEventListener(type, fn);
 			// else if (el.detachEvent) el.detachEvent("on" + type, fn);
 			return el;
 		},
@@ -499,10 +643,10 @@ var uJumbo = (function () {
 		 * 		[headers],
 		 * 		[timeout]
 		 * 	}} data
-		 * 	@returns {Promise}
+		 *    @returns {Promise}
 		 */
 		ajax: function (data) {
-			return new Promise(function(resolve, reject) {
+			return new Promise(function (resolve, reject) {
 				try {
 					if (typeof data != "object" || !data.url || !data.method) {
 						logError("Bad input data for uJumbo.ajax()");
@@ -540,31 +684,39 @@ var uJumbo = (function () {
 					xhr.onerror = function () {
 						if (cbCalled) return;
 						cbCalled = true;
-						reject({ code: xhr.status, message: "XHR error occurs" }, xhr);
+						reject({code: xhr.status, message: "XHR error occurs"}, xhr);
 					};
 
 					xhr.onabort = function () {
 						if (cbCalled) return;
 						cbCalled = true;
-						reject({ code: xhr.status, message: "Request was aborted" }, xhr);
+						reject({code: xhr.status, message: "Request was aborted"}, xhr);
 					};
 
-					if (typeof data.timeout == "number") {
+					if (typeof data.timeout === "number") {
 						xhr.timeout = data.timeout;
 
 						xhr.ontimeout = function () {
 							if (cbCalled) return;
 							cbCalled = true;
-							reject({ code: xhr.status, message: "Request timed out" }, xhr);
+							reject({code: xhr.status, message: "Request timed out"}, xhr);
 						};
 					}
 
 					xhr.onreadystatechange = function () {
-						if (xhr.readyState == 4) {
+						if (xhr.readyState === 4) {
 							if (xhr.status >= 200 && xhr.status < 300) {
-								resolve(xhr.response);
+								if (xhr.responseURL !== data.url) {
+									xhr.redirected = true;
+								}
+
+								resolve(xhr);
 							} else if (xhr.status >= 400 && xhr.status < 600 && !cbCalled) {
-								reject({ code: xhr.status, message: "Response with status code " + xhr.status }, xhr);
+								reject({
+									code: xhr.status,
+									message: "Response with status code " + xhr.status,
+									xhr: xhr
+								});
 							}
 						}
 					};
@@ -640,117 +792,20 @@ var uJumbo = (function () {
 
 			/**
 			 * Send FORM
-			 * @param form
-			 * @param callback
+			 * @param {HTMLFormElement} form
+			 * @param headers
+			 * @param onRedirect
 			 */
-			sendForm: function (form, callback) {
-				uJumbo.ajax({
+			sendForm: function (form, headers, onRedirect) {
+				return uJumbo.ajax({
 					url: form.action,
 					method: "POST",
+					headers: headers,
 					//contentType: "multipart/form-data",
-					data: window["FormData"] ? (new FormData(form)) : serialize(form),
-					callback: callback
+					data: window["FormData"] ? (new FormData(form)) : serialize(form)
 				});
 			}
 		},
-
-		// /**
-		//  * Function for creating application controller
-		//  * @param container
-		//  * @param {Function} Controller
-		//  */
-		// createController: function (container, Controller) {
-		// 	console.log(BaseController); // TODO: Remove
-		//
-		// 	// For IE compatibility but with ES6 class support, it must be done in try-catch with class keyword
-		// 	try {
-		//
-		// 	} catch (e) {
-		//
-		// 	}
-		// 	var Ctrl = function () {
-		// 		console.log("ctrl called");
-		// 		// call super()
-		// 		BaseController.apply(this, Array.prototype.slice.call(arguments));
-		// 		Controller.apply(this, Array.prototype.slice.call(arguments));
-		// 	};
-		//
-		// 	console.log("Ctor", Controller.prototype.constructor);
-		//
-		// 	// Extends BaseController
-		// 	Controller.prototype = Object.create(BaseController.prototype);
-		// 	Controller.prototype.constructor = Controller;
-		//
-		// 	// Extends - it's important to create instance first but call user's constructor onload
-		// 	// so extend user class and call his constructor later as __init()
-		// 	Ctrl.prototype = Object.create(Controller.prototype);
-		// 	Ctrl.prototype.constructor = Controller.prototype.constructor;//Ctrl;
-		// 	// Ctrl.prototype.__init = Controller.prototype.constructor;
-		//
-		// 	console.log(Controller.prototype.constructor);
-		//
-		// 	// instantiate Controller
-		// 	var ctrl = new Ctrl();
-		//
-		// 	// // If initiate method exists, call it
-		// 	// if (ctrl["initiate"]) {
-		// 	// 	ctrl["initiate"]();
-		// 	// }
-		//
-		// 	// store controller in context
-		// 	appContext.cntrls.push(ctrl);
-		//
-		// 	// back/forward buttons event
-		// 	uJumbo.addEvent(window, "popstate", function popsthndlr() {
-		// 		var s = history.state;
-		// 		console.debug("PopState", s, new Date());
-		//
-		// 		if (s && s.uJState) {
-		// 			var i = appContext.cntrls.indexOf(ctrl);
-		// 			if (i == -1) {
-		// 				uJumbo.removeEvent(window, "popstate", popsthndlr);
-		// 				return;
-		// 			}
-		// 			s = s.content[i];
-		// 			if (s) {
-		// 				s.__procSnip(s);
-		// 			}
-		// 		} else {
-		// 			console.log("[PopState] No uJState");
-		// 			//window.location.href = window.location.href;
-		// 			//Controller.prototype.loadPage(location.href, false);
-		// 		}
-		// 	});
-		//
-		// 	uJumbo.onReady(function () {
-		// 		container = uJumbo.get(container);
-		//
-		// 		if (container instanceof NodeList && container.length == 1) {
-		// 			container = container[0];
-		// 		}
-		//
-		// 		if (!(container instanceof Node)) {
-		// 			console.error("Argument 'container' is invalid");
-		// 			return;
-		// 		}
-		//
-		//
-		// 		/** Projdeme container a najdeme si všechny prvky pro nás */
-		// 		var els = container.getElementsByTagName("*");
-		//
-		// 		/** Do elementů přidáme i container samotný*/
-		// 		els = Array.prototype.slice.call(els);
-		// 		els.unshift(container);
-		//
-		// 		//proccess(els, context);
-		//
-		// 		// Call onready received controller
-		// 		// ctrl.__init.call(ctrl);
-		// 		if (ctrl["initialize"]) {
-		// 			ctrl["initialize"]();
-		// 		}
-		// 	});
-		// },
 
 		/**
 		 * Controller class which should be inherited
