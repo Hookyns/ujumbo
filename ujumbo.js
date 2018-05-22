@@ -297,7 +297,7 @@ var uJumbo = (function () {
 	/**
 	 * Refresh elements in container.
 	 */
-	BaseController.prototype.refresh = function() {
+	BaseController.prototype.refresh = function () {
 		// TODO: Implement; Vytvořeno hlavně kvůli tomu, aby mohl uživatel něco zavolat,
 		// že udělal změny s elementy (např přidat nové tlačítko s eventem) a nechat znovu dohledat atributy a registrovat akce
 	};
@@ -334,7 +334,7 @@ var uJumbo = (function () {
 	};
 
 	/**
-	 * Proces Doubl-Sided Rendering response
+	 * Process Doubl-Sided Rendering response
 	 * @param response
 	 * @param href
 	 * @param pushToHistory
@@ -346,6 +346,8 @@ var uJumbo = (function () {
 		if (content) {
 			content.innerHTML = response;
 
+			let isReaload = href === location.href;
+
 			if (pushToHistory) {
 				saveState(href);
 			} else {
@@ -353,19 +355,23 @@ var uJumbo = (function () {
 			}
 
 			// FadeOut effect
-			content.className = (content.className.replace("j-fade-in", "") + " j-fade-out").trim();
+			if (!isReaload) {
+				content.className = (content.className.replace("j-fade-in", "") + " j-fade-out").trim();
+			}
 
 			let prevent = this[ON_NAVIGATE_HANDLER_NAME]
 				? (this[ON_NAVIGATE_HANDLER_NAME](null, response) === false)
 				: false;
 
 			if (!prevent) {
-				this.__procSnip(response, undefined, function() {
+				this.__procSnip(response, undefined, function () {
 
 					// Fade In effect
-					setTimeout(function() {
-						content.className = (content.className.replace("j-fade-out", "") + " j-fade-in").trim();
-					}, 10);
+					if (!isReaload) {
+						setTimeout(function () {
+							content.className = (content.className.replace("j-fade-out", "") + " j-fade-in").trim();
+						}, 10);
+					}
 				});
 			}
 		}
@@ -393,6 +399,20 @@ var uJumbo = (function () {
 	};
 
 	/**
+	 * Find events on element
+	 * @param dataset
+	 * @param ell
+	 * @private
+	 */
+	BaseController.prototype.__findEvents = function (dataset, ell) {
+		for (var ds in dataset) {
+			if (dataset.hasOwnProperty(ds) && ds.substr(0, 3) === "jOn") {
+				dataset.jInitiated = true;
+				this.events.push({element: ell, event: ds.substr(3), method: dataset[ds]});
+			}
+		}
+	};
+	/**
 	 * Find all data attrs
 	 * @private
 	 * @param {NodeList} els
@@ -405,30 +425,32 @@ var uJumbo = (function () {
 				dataset = ell.dataset;
 
 				if (dataset && !dataset.jInitiated) {
-					for (var ds in dataset) {
-						if (dataset.hasOwnProperty(ds) && ds.substr(0, 3) === "jOn") {
-							this.events.push({element: ell, event: ds.substr(3), method: dataset[ds]});
-						}
-					}
+					this.__findEvents(dataset, ell);
 
 					// LINK
-					if ("jLink" in dataset) {
-						if (!ell.href || ell.tagName !== "A") continue;
+					if (ell.tagName === "A" && ell.href && (
+							"jLink" in dataset
+							|| (uJumbo.preventMode && !("jPrevent" in dataset)))
+					) {
+						// if (!ell.href || ell.tagName !== "A") continue;
+						dataset.jInitiated = true;
 						this.links.push(ell);
 					}
 
 					// SNIPPET
 					if ("jSnippet" in dataset) {
+						dataset.jInitiated = true;
 						this.snippets[dataset["jSnippet"]] = ell;
 					}
 
 					// FORM
-					if ("jForm" in dataset) {
-						if (!ell.action || ell.tagName !== "FORM") continue;
+					if (ell.tagName === "FORM" && ell.action && (
+							"jForm" in dataset
+							|| (uJumbo.preventMode && !("jPrevent" in dataset)))
+					) {
+						dataset.jInitiated = true;
 						this.forms.push(ell);
 					}
-
-					dataset.jInitiated = true;
 				}
 			}
 		}
@@ -452,12 +474,12 @@ var uJumbo = (function () {
 					uJumbo.addEvent(item.element, item.event, function (e) {
 						args[ei - 1] = e || window.event;
 
-						if (!self.prototype[fnName]) {
+						if (!self[fnName]) {
 							console.error("Method", fnName, "doesn't exists in your controller", this.constructor.name);
 							return false;
 						}
 
-						return self.prototype[fnName].apply(self, args);
+						return self[fnName].apply(self, args);
 					});
 				});
 			})(this.events[e]);
@@ -523,6 +545,7 @@ var uJumbo = (function () {
 		}
 
 		var self = this;
+
 		function next() {
 			self.__findAttrs(p.getElementsByTagName("*"));
 			self.__regActions();
@@ -538,7 +561,7 @@ var uJumbo = (function () {
 		// Add scripts files
 		var before = document.body.firstChild, cnt = jsFiles.length;
 		for (var i = 0; i < jsFiles.length; i++) {
-			(function() {
+			(function () {
 				var scrpt = document.createElement("script");
 				scrpt.setAttribute("src", jsFiles[i]);
 				scrpt.onload = function () {
@@ -564,6 +587,12 @@ var uJumbo = (function () {
 		debug: false,
 
 		loadingSpinnerHtml: "<div class='ujumbo-loading-spinner'><div>",
+
+		/**
+		 * If TRUE, then all elements will be processed automatically, except elements with data-js-prevent
+		 * If FALSE, then you must mark all wanted elements with data-j attributes
+		 */
+		preventMode: true,
 
 		/**
 		 * Return list of elements matched by selector query
