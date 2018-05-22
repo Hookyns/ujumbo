@@ -823,9 +823,8 @@ var uJumbo = (function () {
 			 * Send FORM
 			 * @param {HTMLFormElement} form
 			 * @param headers
-			 * @param onRedirect
 			 */
-			sendForm: function (form, headers, onRedirect) {
+			sendForm: function (form, headers) {
 				return uJumbo.ajax({
 					url: form.action,
 					method: "POST",

@@ -89,9 +89,8 @@ declare interface uJumbo {
 		 * Send FORM
 		 * @param {HTMLFormElement} form
 		 * @param headers
-		 * @param onRedirect
 		 */
-		sendForm(form, headers, onRedirect): Promise;
+		sendForm(form, headers): Promise;
 	},
 
 	/**
